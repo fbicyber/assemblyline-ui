@@ -1,0 +1,25 @@
+{
+    "sp": {
+        "entityId": "http://localhost:8080/saml/metadata/",
+        "assertionConsumerService": {
+            "url": "http://localhost:8080/saml/acs/",
+            "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+        },
+        "singleLogoutService": {
+            "url": "http://localhost:8080/saml/sls/",
+            "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+        },
+        "NameIDFormat": "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent"
+    },
+    "idp": {
+        "entityId": "https://fs1.324cate.com/adfs/services/trust",
+        "singleSignOnService": {
+            "url": "https://fs1.324cate.com/adfs/ls/",
+            "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+        },
+        "singleLogoutService": {
+            "url": "https://fs1.324cate.com/adfs/ls/",
+            "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+        }
+    }
+}
