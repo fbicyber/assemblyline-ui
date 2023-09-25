@@ -405,7 +405,7 @@ def login(**_):
 
     if config.auth.saml.enabled:
         req = prepare_flask_request(request)
-        auth = OneLogin_Saml2_Auth(req, custom_base_path='/'.join([auth_api.url_prefix, config.auth.saml.path]))
+        auth = OneLogin_Saml2_Auth(req, custom_base_path=config.auth.saml.path)
         errors = []
         error_reason = None
         not_auth_warn = False
