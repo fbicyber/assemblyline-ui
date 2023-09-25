@@ -19,3 +19,8 @@ build/
 dist/
 *.py[cod]
 *.egg-info
+
+# SAML security files
+assemblyline_ui/saml/conf/*
+!assemblyline_ui/saml/conf/settings-example.json
+!assemblyline_ui/saml/conf/certs/README
