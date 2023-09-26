@@ -6,13 +6,15 @@ from onelogin.saml2.auth import OneLogin_Saml2_Auth
 from onelogin.saml2.utils import OneLogin_Saml2_Utils
 from werkzeug.wrappers import Request, Response
 
+# Code adapted from the python3-saml flask demo:
+# https://github.com/SAML-Toolkits/python3-saml/blob/master/demo-flask/index.py
 
-def saml_login(use_auth_n_request: bool = False) -> Response:
+
+def saml_login() -> Response:
     auth: OneLogin_Saml2_Auth = _make_saml_auth()
 
     sso_built_url: str = auth.login()
-    if use_auth_n_request:
-        request.session["AuthNRequestID"] = auth.get_last_request_id()
+    request.session["AuthNRequestID"] = auth.get_last_request_id()
     return redirect(sso_built_url)
 
 
@@ -44,12 +46,6 @@ def saml_single_logout() -> Optional[Response]:
     else:
         errors = [f" - {error}\n" for error in errors]
         LOGGER.error(f"SAML SLO request failed: {auth.get_last_error_reason()}\n{''.join(errors)}")
-
-
-# if 'samlUserdata' in session:
-#     paint_logout = True
-#     if len(session['samlUserdata']) > 0:
-#         attributes = session['samlUserdata'].items()
 
 
 def saml_process_assertion() -> Response:

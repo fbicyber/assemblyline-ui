@@ -33,10 +33,10 @@ from assemblyline_ui.helper.oauth import fetch_avatar, parse_profile
 from assemblyline_ui.helper.user import API_PRIV_MAP, get_dynamic_classification
 from assemblyline_ui.http_exceptions import AuthenticationException
 from assemblyline_ui.security.authenticator import default_authenticator
+from assemblyline_ui.security.saml.saml_auth import saml_login
 from authlib.integrations.base_client import OAuthError
 from authlib.integrations.requests_client import OAuth2Session
-from flask import current_app, redirect, request
-from flask import session as flsk_session
+from flask import current_app, redirect, request, session as flsk_session
 from passlib.hash import bcrypt
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
@@ -324,22 +324,6 @@ def get_reset_link(**_):
     return make_api_response({"success": False}, "We have no record of this email address in our system.", 400)
 
 
-# @auth_api.route('/metadata/')
-# def metadata():
-#     req = prepare_flask_request(request)
-#     auth = OneLogin_Saml2_Auth(req, custom_base_path=config.auth.saml.path)
-#     settings = auth.get_settings()
-#     metadata = settings.get_sp_metadata()
-#     errors = settings.validate_metadata(metadata)
-
-#     if len(errors) == 0:
-#         resp = make_response(metadata, 200)
-#         resp.headers['Content-Type'] = 'text/xml'
-#     else:
-#         resp = make_response(', '.join(errors), 500)
-#     return resp
-
-
 # noinspection PyBroadException,PyPropertyAccess
 @auth_api.route("/login/", methods=["GET", "POST"])
 def login(**_):
@@ -374,16 +358,22 @@ def login(**_):
     except (BadRequest, UnsupportedMediaType):
         data = request.values
 
-    user = data.get('user', None)
-    password = data.get('password', None)
-    apikey = data.get('apikey', None)
-    webauthn_auth_resp = data.get('webauthn_auth_resp', None)
-    oauth_provider = data.get('oauth_provider', None)
-    oauth_token_id = data.get('oauth_token_id', None)
-    oauth_token = data.get('oauth_token', None)
+    user = data.get('user')
+    password = data.get('password')
+    apikey = data.get('apikey')
+    webauthn_auth_resp = data.get('webauthn_auth_resp')
+    oauth_provider = data.get('oauth_provider')
+    oauth_token_id = data.get('oauth_token_id')
+    oauth_token = data.get('oauth_token')
+    saml_token = data.get('saml_token')
 
     if config.auth.saml.enabled:
-        pass
+        if saml_token is None:
+            return saml_login()
+        else:
+            saml_user_data = flsk_session.get('samlUserdata')
+            if saml_user_data:
+                attributes = flsk_session['samlUserdata'].items()
 
     if config.auth.oauth.enabled and oauth_provider and oauth_token is None:
         oauth = current_app.extensions.get('authlib.integrations.flask_client')
