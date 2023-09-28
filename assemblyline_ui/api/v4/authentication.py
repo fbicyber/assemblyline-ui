@@ -327,7 +327,6 @@ def get_reset_link(**_):
 
 # noinspection PyBroadException,PyPropertyAccess
 @auth_api.route("/login/", methods=["GET", "POST"])
-@cross_origin()
 def login(**_):
     """
     Login the user onto the system
