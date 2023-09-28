@@ -36,7 +36,8 @@ from assemblyline_ui.security.authenticator import default_authenticator
 from assemblyline_ui.security.saml.saml_auth import saml_login
 from authlib.integrations.base_client import OAuthError
 from authlib.integrations.requests_client import OAuth2Session
-from flask import current_app, redirect, request, session as flsk_session
+from flask import current_app, redirect, request
+from flask import session as flsk_session
 from passlib.hash import bcrypt
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
@@ -326,6 +327,7 @@ def get_reset_link(**_):
 
 # noinspection PyBroadException,PyPropertyAccess
 @auth_api.route("/login/", methods=["GET", "POST"])
+@cross_origin()
 def login(**_):
     """
     Login the user onto the system
@@ -370,10 +372,12 @@ def login(**_):
     if config.auth.saml.enabled:
         if saml_token is None:
             return saml_login()
+            # return redirect("/saml/sso/")
         else:
             saml_user_data = flsk_session.get('samlUserdata')
             if saml_user_data:
                 attributes = flsk_session['samlUserdata'].items()
+                foo = 2
 
     if config.auth.oauth.enabled and oauth_provider and oauth_token is None:
         oauth = current_app.extensions.get('authlib.integrations.flask_client')
@@ -477,9 +481,13 @@ def logout(**_):
         return make_api_response("", err="No user logged in?", status_code=400)
 
 
-@auth_api.route("/saml/", methods=["GET"])
-@api_login(audit=False, check_xsrf_token=False)
-def saml_metadata(**_):
+@auth_api.route("/saml/sso/", methods=["GET"])
+def saml_sso(**_):
+    return saml_login()
+
+
+@auth_api.route("/saml/acs/", methods=["GET"])
+def saml_acs(**_):
     LOGGER.error("REQUESTING METADATA")
     return "TODOBAR"
 

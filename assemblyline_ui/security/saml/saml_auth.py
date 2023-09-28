@@ -11,10 +11,13 @@ from werkzeug.wrappers import Request, Response
 
 
 def saml_login() -> Response:
-    auth: OneLogin_Saml2_Auth = _make_saml_auth()
+    try:
+        auth: OneLogin_Saml2_Auth = _make_saml_auth()
+    except Exception as ex:
+        foo = ex
 
     sso_built_url: str = auth.login()
-    request.session["AuthNRequestID"] = auth.get_last_request_id()
+    # session["AuthNRequestID"] = auth.get_last_request_id()
     return redirect(sso_built_url)
 
 

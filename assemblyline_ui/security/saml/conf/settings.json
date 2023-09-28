@@ -1,24 +1,24 @@
 {
     "sp": {
-        "entityId": "http://localhost:8080/saml/metadata/",
+        "entityId": "https://localhost:8080/saml/metadata/",
         "assertionConsumerService": {
-            "url": "http://localhost:8080/saml/acs/",
+            "url": "https://ubuntu2/api/v4/auth/saml/acs/",
             "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
         },
         "singleLogoutService": {
-            "url": "http://localhost:8080/saml/sls/",
+            "url": "https://ubuntu2/api/v4/auth/saml/sls/",
             "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
         },
         "NameIDFormat": "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent"
     },
     "idp": {
-        "entityId": "https://fs1.324cate.com/adfs/services/trust",
+        "entityId": "https://saml.example.com/entityid",
         "singleSignOnService": {
-            "url": "https://fs1.324cate.com/adfs/ls/",
+            "url": "https://mocksaml.com/api/saml/sso",
             "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
         },
         "singleLogoutService": {
-            "url": "https://fs1.324cate.com/adfs/ls/",
+            "url": "https://example.com/fixme/",
             "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
         }
     }
