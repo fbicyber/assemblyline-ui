@@ -11,13 +11,11 @@ from werkzeug.wrappers import Request, Response
 
 
 def saml_login() -> Response:
-    try:
-        auth: OneLogin_Saml2_Auth = _make_saml_auth()
-    except Exception as ex:
-        foo = ex
+
+    auth: OneLogin_Saml2_Auth = _make_saml_auth()
 
     sso_built_url: str = auth.login()
-    # session["AuthNRequestID"] = auth.get_last_request_id()
+    session["AuthNRequestID"] = auth.get_last_request_id()
     return redirect(sso_built_url)
 
 
@@ -87,14 +85,18 @@ def saml_process_assertion() -> Response:
             # the value of the request.form["RelayState"] is a trusted URL.
             return redirect(auth.redirect_to(request.form["RelayState"]))
     else:
-        errors = [f" - {error}\n" for error in errors]
-        LOGGER.error(f"SAML SLO request failed: {auth.get_last_error_reason()}\n{''.join(errors)}")
+        errors: list = [f" - {error}\n" for error in errors]
+        error_msg: str = f"SAML ACS request failed: {auth.get_last_error_reason()}\n{''.join(errors)}"
+        LOGGER.error(error_msg)
+        raise Exception(error_msg)
 
 
 def _prepare_flask_request(request: Request) -> Dict[str, Any]:
     # If server is behind proxys or balancers use the HTTP_X_FORWARDED fields
     return {
-        "https": "on" if request.scheme == "https" else "off",
+        # TODO - the https switching disabled because everything redirects to http under the hood. Possibly just a
+        # local misconfiguration issue, but it screws up the URL matching later on in `saml_process_assertion`.
+        "https": "on",  # if request.scheme == "https" else "off",
         "http_host": request.host,
         "script_name": request.path,
         "get_data": request.args.copy(),

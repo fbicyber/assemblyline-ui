@@ -33,7 +33,7 @@ from assemblyline_ui.helper.oauth import fetch_avatar, parse_profile
 from assemblyline_ui.helper.user import API_PRIV_MAP, get_dynamic_classification
 from assemblyline_ui.http_exceptions import AuthenticationException
 from assemblyline_ui.security.authenticator import default_authenticator
-from assemblyline_ui.security.saml.saml_auth import saml_login
+from assemblyline_ui.security.saml.saml_auth import saml_login, saml_process_assertion
 from authlib.integrations.base_client import OAuthError
 from authlib.integrations.requests_client import OAuth2Session
 from flask import current_app, redirect, request
@@ -370,7 +370,8 @@ def login(**_):
 
     if config.auth.saml.enabled:
         if saml_token is None:
-            return saml_login()
+            pass
+            # return saml_login()
             # return redirect("/saml/sso/")
         else:
             saml_user_data = flsk_session.get('samlUserdata')
@@ -485,10 +486,12 @@ def saml_sso(**_):
     return saml_login()
 
 
-@auth_api.route("/saml/acs/", methods=["GET"])
+@auth_api.route("/saml/acs/", methods=["GET", "POST"])
 def saml_acs(**_):
-    LOGGER.error("REQUESTING METADATA")
-    return "TODOBAR"
+    try:
+        return saml_process_assertion()
+    except Exception as ex:
+        return make_api_response({"success": False}, str(ex), 469)
 
 
 # @auth_api.route("/saml/", methods=["GET"])
