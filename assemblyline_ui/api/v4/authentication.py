@@ -1,6 +1,7 @@
 import hashlib
 import re
 from io import BytesIO
+from typing import Any, Dict
 from urllib.parse import urlparse
 
 import jwt
@@ -33,13 +34,17 @@ from assemblyline_ui.helper.oauth import fetch_avatar, parse_profile
 from assemblyline_ui.helper.user import API_PRIV_MAP, get_dynamic_classification
 from assemblyline_ui.http_exceptions import AuthenticationException
 from assemblyline_ui.security.authenticator import default_authenticator
-from assemblyline_ui.security.saml.saml_auth import saml_login, saml_process_assertion
+from assemblyline_ui.security.saml.saml_auth import saml_login
 from authlib.integrations.base_client import OAuthError
 from authlib.integrations.requests_client import OAuth2Session
 from flask import current_app, redirect, request
+from flask import session
 from flask import session as flsk_session
+from onelogin.saml2.auth import OneLogin_Saml2_Auth
+from onelogin.saml2.utils import OneLogin_Saml2_Utils
 from passlib.hash import bcrypt
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
+from werkzeug.wrappers import Request
 
 SCOPES = {
     'r': ["R"],
@@ -366,18 +371,11 @@ def login(**_):
     oauth_provider = data.get('oauth_provider')
     oauth_token_id = data.get('oauth_token_id')
     oauth_token = data.get('oauth_token')
-    saml_token = data.get('saml_token')
+    saml_name_id = flsk_session.get('samlNameId')
+    saml_user_data = flsk_session.get('samlUserdata')
 
     if config.auth.saml.enabled:
-        if saml_token is None:
-            pass
-            # return saml_login()
-            # return redirect("/saml/sso/")
-        else:
-            saml_user_data = flsk_session.get('samlUserdata')
-            if saml_user_data:
-                attributes = flsk_session['samlUserdata'].items()
-                foo = 2
+        user = saml_name_id
 
     if config.auth.oauth.enabled and oauth_provider and oauth_token is None:
         oauth = current_app.extensions.get('authlib.integrations.flask_client')
@@ -392,7 +390,11 @@ def login(**_):
     except Exception:
         raise AuthenticationException('Invalid OTP token')
 
-    if (user and password) or (user and apikey) or (user and oauth_token_id) or oauth_token:
+    if (user and password) or \
+       (user and apikey) or \
+       (user and oauth_token_id) or \
+        oauth_token or \
+       (user and saml_user_data):
         auth = {
             'username': user,
             'password': password,
@@ -401,7 +403,8 @@ def login(**_):
             'apikey': apikey,
             'oauth_token_id': oauth_token_id,
             'oauth_token': oauth_token,
-            'oauth_provider': oauth_provider
+            'oauth_provider': oauth_provider,
+            'saml_user_data': saml_user_data
         }
 
         logged_in_uname = None
@@ -488,10 +491,53 @@ def saml_sso(**_):
 
 @auth_api.route("/saml/acs/", methods=["GET", "POST"])
 def saml_acs(**_):
-    try:
-        return saml_process_assertion()
-    except Exception as ex:
-        return make_api_response({"success": False}, str(ex), 469)
+    # try:
+    #     return saml_process_assertion()
+    # except Exception as ex:
+    #     return make_api_response({"success": False}, str(ex), 469)
+    '''
+    A SAML Assertion Consumer Service (ACS) is a web service endpoint that is
+    used in the SAML authentication and authorization protocol. The ACS is a
+    service provided by the service provider (SP) that receives and processes
+    SAML assertions from the identity provider (IdP). The ACS is responsible
+    for extracting the relevant information from the SAML assertion, such as
+    the user's attributes or the authentication event, and using that
+    information to grant the user access to the protected resource.
+    '''
+    request_data: Dict[str, Any] = _prepare_flask_request(request)
+    auth: OneLogin_Saml2_Auth = _make_saml_auth(request_data)
+    request_id: str = session.get("AuthNRequestID")
+
+    auth.process_response(request_id=request_id)
+    errors: list = auth.get_errors()
+
+    # If authentication failed, it'll be noted in `errors`
+    # TODO: redirect on failure? something else?
+    if len(errors) == 0:
+        if "AuthNRequestID" in session:
+            del session["AuthNRequestID"]
+
+        session["samlUserdata"] = auth.get_attributes()
+        session["samlNameId"] = auth.get_nameid()
+        # session["samlNameIdFormat"] = auth.get_nameid_format()
+        # session["samlNameIdNameQualifier"] = auth.get_nameid_nq()
+        # session["samlNameIdSPNameQualifier"] = auth.get_nameid_spnq()
+        # session["samlSessionIndex"] = auth.get_session_index()
+
+        self_url = OneLogin_Saml2_Utils.get_self_url(request_data)
+
+        login()
+
+        if "RelayState" in request.form and self_url != request.form["RelayState"]:
+            # To avoid 'Open Redirect' attacks, before execute the redirection confirm
+            # the value of the request.form["RelayState"] is a trusted URL.
+            return redirect(auth.redirect_to(request.form["RelayState"]))
+    else:
+        errors: list = [f" - {error}\n" for error in errors]
+        error_msg: str = f"SAML ACS request failed: {auth.get_last_error_reason()}\n{''.join(errors)}"
+        LOGGER.error(error_msg)
+        # TODO - need better error handling
+        raise Exception(error_msg)
 
 
 # @auth_api.route("/saml/", methods=["GET"])
@@ -1010,3 +1056,24 @@ def validate_otp(token, **kwargs):
     else:
         flsk_session['temp_otp_sk'] = secret_key
         return make_api_response({'success': False}, err="OTP token does not match secret key", status_code=400)
+
+
+def _prepare_flask_request(request: Request) -> Dict[str, Any]:
+    # If server is behind proxys or balancers use the HTTP_X_FORWARDED fields
+    return {
+        # TODO - the https switching disabled because everything redirects to http under the hood. Possibly just a
+        # local misconfiguration issue, but it screws up the URL matching later on in `saml_process_assertion`.
+        "https": "on",  # if request.scheme == "https" else "off",
+        "http_host": request.host,
+        "script_name": request.path,
+        "get_data": request.args.copy(),
+        # Uncomment if using ADFS as IdP, https://github.com/onelogin/python-saml/pull/144
+        # "lowercase_urlencoding": True,
+        "post_data": request.form.copy()
+    }
+
+
+def _make_saml_auth(request_data: Dict[str, Any] = None) -> OneLogin_Saml2_Auth:
+    request_data: Dict[str, Any] = request_data or _prepare_flask_request(request)
+    return OneLogin_Saml2_Auth(request_data,
+                               custom_base_path=config.auth.saml.path)

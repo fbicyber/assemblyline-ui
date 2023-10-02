@@ -14,7 +14,7 @@ def saml_login() -> Response:
 
     auth: OneLogin_Saml2_Auth = _make_saml_auth()
 
-    sso_built_url: str = auth.login()
+    sso_built_url: str = auth.login(return_to="https://ubuntu2/")
     session["AuthNRequestID"] = auth.get_last_request_id()
     return redirect(sso_built_url)
 
@@ -66,19 +66,22 @@ def saml_process_assertion() -> Response:
     auth.process_response(request_id=request_id)
     errors: list = auth.get_errors()
 
-    # not_auth_warn = not auth.is_authenticated()
+    # If authentication failed, it'll be noted in `errors`
+    # TODO: redirect on failure? something else?
     if len(errors) == 0:
         if "AuthNRequestID" in session:
             del session["AuthNRequestID"]
 
         session["samlUserdata"] = auth.get_attributes()
         session["samlNameId"] = auth.get_nameid()
-        session["samlNameIdFormat"] = auth.get_nameid_format()
-        session["samlNameIdNameQualifier"] = auth.get_nameid_nq()
-        session["samlNameIdSPNameQualifier"] = auth.get_nameid_spnq()
-        session["samlSessionIndex"] = auth.get_session_index()
+        # session["samlNameIdFormat"] = auth.get_nameid_format()
+        # session["samlNameIdNameQualifier"] = auth.get_nameid_nq()
+        # session["samlNameIdSPNameQualifier"] = auth.get_nameid_spnq()
+        # session["samlSessionIndex"] = auth.get_session_index()
 
         self_url = OneLogin_Saml2_Utils.get_self_url(request_data)
+
+        login()
 
         if "RelayState" in request.form and self_url != request.form["RelayState"]:
             # To avoid 'Open Redirect' attacks, before execute the redirection confirm
@@ -88,6 +91,7 @@ def saml_process_assertion() -> Response:
         errors: list = [f" - {error}\n" for error in errors]
         error_msg: str = f"SAML ACS request failed: {auth.get_last_error_reason()}\n{''.join(errors)}"
         LOGGER.error(error_msg)
+        # TODO - need better error handling
         raise Exception(error_msg)
 
 
