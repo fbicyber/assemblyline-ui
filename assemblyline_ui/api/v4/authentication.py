@@ -374,7 +374,7 @@ def login(**_):
     saml_name_id = flsk_session.get('samlNameId')
     saml_user_data = flsk_session.get('samlUserdata')
 
-    if config.auth.saml.enabled:
+    if config.auth.saml.enabled and saml_name_id and saml_user_data:
         user = saml_name_id
 
     if config.auth.oauth.enabled and oauth_provider and oauth_token is None:
@@ -1076,4 +1076,4 @@ def _prepare_flask_request(request: Request) -> Dict[str, Any]:
 def _make_saml_auth(request_data: Dict[str, Any] = None) -> OneLogin_Saml2_Auth:
     request_data: Dict[str, Any] = request_data or _prepare_flask_request(request)
     return OneLogin_Saml2_Auth(request_data,
-                               custom_base_path=config.auth.saml.path)
+                               custom_base_path=config.auth.saml.config_dir)

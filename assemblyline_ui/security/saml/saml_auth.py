@@ -1,6 +1,9 @@
 from typing import Any, Dict, Optional
 
-from assemblyline_ui.config import LOGGER, config
+from assemblyline.odm.models.user import load_roles_form_acls
+from assemblyline_ui.config import LOGGER, AssemblylineDatastore, config
+from assemblyline_ui.helper.user import API_PRIV_MAP
+from assemblyline_ui.http_exceptions import AuthenticationException
 from flask import redirect, request, session
 from onelogin.saml2.auth import OneLogin_Saml2_Auth
 from onelogin.saml2.utils import OneLogin_Saml2_Utils
@@ -14,6 +17,7 @@ def saml_login() -> Response:
 
     auth: OneLogin_Saml2_Auth = _make_saml_auth()
 
+    # TODO don't hardcode `return_to` value
     sso_built_url: str = auth.login(return_to="https://ubuntu2/")
     session["AuthNRequestID"] = auth.get_last_request_id()
     return redirect(sso_built_url)
@@ -81,8 +85,6 @@ def saml_process_assertion() -> Response:
 
         self_url = OneLogin_Saml2_Utils.get_self_url(request_data)
 
-        login()
-
         if "RelayState" in request.form and self_url != request.form["RelayState"]:
             # To avoid 'Open Redirect' attacks, before execute the redirection confirm
             # the value of the request.form["RelayState"] is a trusted URL.
@@ -93,6 +95,77 @@ def saml_process_assertion() -> Response:
         LOGGER.error(error_msg)
         # TODO - need better error handling
         raise Exception(error_msg)
+
+
+def validate_saml_user(username: str,
+                       saml_user_data: dict,
+                       storage: AssemblylineDatastore) -> (str, list[str]):
+
+    if config.auth.saml.enabled and username:
+        if saml_user_data:
+
+            # TODO - not sure how we want to implement this, or if we even want
+            # to. If they can log into SAML would we ever want to deny someone
+            # access?
+            # if not saml_user_data['access']:
+            #     raise AuthenticationException("This user is not allowed access to the system")
+
+            cur_user = storage.user.get(username, as_obj=False) or {}
+
+            # Make sure the user exists in AL and is in sync
+            if (not cur_user and config.auth.saml.auto_create) or (cur_user and config.auth.saml.auto_sync):
+                # TODO
+                # u_classification = ldap_info['classification']
+
+                # Normalize email address
+                email = saml_user_data["email"]
+                if isinstance(email, list) and email:
+                    email = email[0]
+                if isinstance(email, str) is not None:
+                    email = email.lower()
+
+                # Generate user data from SAML
+                data = dict(uname=username,
+                            name=f"{saml_user_data['lastName']}, {saml_user_data['firstName']}",
+                            email=email,
+                            password="__NO_PASSWORD__",
+                            )
+                # TODO
+                #     classification=u_classification,
+                #     type=ldap_info['type'],
+                #     roles=ldap_info['roles'],
+                #     dn=ldap_info['dn']
+
+                # TODO
+                # # Get the dynamic classification info
+                # data['classification'] = get_dynamic_classification(u_classification, data)
+
+                # TODO
+                # # Save the user avatar avatar from ldap
+                # img_data = get_attribute(ldap_info, config.auth.ldap.image_field, safe=False)
+                # if img_data:
+                #     b64_img = base64.b64encode(img_data).decode()
+                #     avatar = f'data:image/{config.auth.ldap.image_format};base64,{b64_img}'
+                #     storage.user_avatar.save(username, avatar)
+
+                # Save the updated user
+                cur_user.update(data)
+                storage.user.save(username, cur_user)
+
+            if cur_user:
+                # TODO - read roles from saml info?
+                return username, ["R", "W"]
+            else:
+                raise AuthenticationException("User auto-creation is disabled")
+
+        # TODO - do we want to allow this?
+        elif config.auth.internal.enabled:
+            # Fallback to internal auth
+            pass
+        else:
+            raise AuthenticationException("Bad SAML user data")
+
+    return None
 
 
 def _prepare_flask_request(request: Request) -> Dict[str, Any]:
@@ -113,4 +186,4 @@ def _prepare_flask_request(request: Request) -> Dict[str, Any]:
 def _make_saml_auth(request_data: Dict[str, Any] = None) -> OneLogin_Saml2_Auth:
     request_data: Dict[str, Any] = request_data or _prepare_flask_request(request)
     return OneLogin_Saml2_Auth(request_data,
-                               custom_base_path=config.auth.saml.path)
+                               custom_base_path=config.auth.saml.config_dir)

@@ -1,10 +1,9 @@
-from assemblyline.odm.models.user import load_roles_form_acls
-import jwt
-import requests
-
 from copy import copy
 
-from assemblyline_ui.config import config, get_token_store, STORAGE
+import jwt
+import requests
+from assemblyline.odm.models.user import load_roles_form_acls
+from assemblyline_ui.config import STORAGE, config, get_token_store
 from assemblyline_ui.helper.oauth import parse_profile
 from assemblyline_ui.http_exceptions import AuthenticationException
 

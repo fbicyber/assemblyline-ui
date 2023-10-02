@@ -6,6 +6,7 @@ from assemblyline.odm.models.user import USER_ROLES
 from assemblyline.remote.datatypes.queues.named import NamedQueue
 from assemblyline_ui.config import AUDIT, AUDIT_KW_TARGET, AUDIT_LOG, KV_SESSION, config
 from assemblyline_ui.http_exceptions import AuthenticationException
+from assemblyline_ui.security.saml.saml_auth import validate_saml_user
 from assemblyline_ui.security.apikey_auth import validate_apikey
 from assemblyline_ui.security.ldap_auth import validate_ldapuser
 from assemblyline_ui.security.oauth_auth import validate_oauth_id, validate_oauth_token
@@ -207,10 +208,9 @@ def default_authenticator(auth, req, ses, storage):
         validated_user, roles_limit = validate_apikey(uname, apikey, storage)
         if not validated_user:
             validated_user, roles_limit = validate_oauth_token(oauth_token, oauth_provider)
+        # TODO - move this down to the 2FA group?
         if not validated_user and saml_user_data:
-            validated_user = uname
-            # TODO - determine roles from saml_user_data
-            roles_limit = ["R", "W"]
+            validated_user, roles_limit = validate_saml_user(uname, saml_user_data, storage)
 
         if validated_user:
             return validated_user, roles_limit
