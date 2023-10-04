@@ -34,7 +34,6 @@ from assemblyline_ui.helper.oauth import fetch_avatar, parse_profile
 from assemblyline_ui.helper.user import API_PRIV_MAP, get_dynamic_classification
 from assemblyline_ui.http_exceptions import AuthenticationException
 from assemblyline_ui.security.authenticator import default_authenticator
-from assemblyline_ui.security.saml.saml_auth import saml_login
 from authlib.integrations.base_client import OAuthError
 from authlib.integrations.requests_client import OAuth2Session
 from flask import current_app, redirect, request
@@ -486,15 +485,14 @@ def logout(**_):
 
 @auth_api.route("/saml/sso/", methods=["GET"])
 def saml_sso(**_):
-    return saml_login()
+    auth: OneLogin_Saml2_Auth = _make_saml_auth()
+    sso_built_url: str = auth.login(return_to=request.host_url)
+    session["AuthNRequestID"] = auth.get_last_request_id()
+    return redirect(sso_built_url)
 
 
 @auth_api.route("/saml/acs/", methods=["GET", "POST"])
 def saml_acs(**_):
-    # try:
-    #     return saml_process_assertion()
-    # except Exception as ex:
-    #     return make_api_response({"success": False}, str(ex), 469)
     '''
     A SAML Assertion Consumer Service (ACS) is a web service endpoint that is
     used in the SAML authentication and authorization protocol. The ACS is a
@@ -528,17 +526,59 @@ def saml_acs(**_):
 
         self_url = OneLogin_Saml2_Utils.get_self_url(request_data)
 
-        if "RelayState" in request.form and self_url != request.form["RelayState"]:
-            # To avoid 'Open Redirect' attacks, before execute the redirection confirm
-            # the value of the request.form["RelayState"] is a trusted URL.
-            return redirect(auth.redirect_to(request.form["RelayState"]))
+        redirect_to: str = request.form.get("RelayState")
+
+        if redirect_to and self_url != redirect_to:
+            # To avoid open redirect attacks, make sure we're being redirected to the same host
+            if is_same_host(request.host, redirect_to):
+                return redirect(auth.redirect_to(redirect_to))
+            else:
+                return make_api_response({"err_code": 1},
+                                         err="SAML ACS `RelayState` attempted to redirect to an unknown host",
+                                         status_code=401)
+        else:
+            return make_api_response({"err_code": 1},
+                                     err="SAML ACS request made without a `RelayState`",
+                                     status_code=401)
     else:
-        errors: list = "\n".join([f" - {error}" for error in errors])
-        error_msg: str = f"SAML ACS request failed: {auth.get_last_error_reason()}\n{errors}"
-        LOGGER.error(error_msg)
+        errors = "\n".join([f" - {error}\n" for error in auth.get_errors()])
+        LOGGER.error(f"SAML ACS request failed: {auth.get_last_error_reason()}\n{errors}")
         return make_api_response({"err_code": 1,
                                   "exception": auth.get_last_error_reason()},
-                                 err="Unhandled exception occured while processing SAML ACS",
+                                 err="An error occured while processing SAML ACS",
+                                 status_code=401)
+
+
+@auth_api.route("/saml/slo/", methods=["GET"])
+def saml_logout(**_):
+    auth: OneLogin_Saml2_Auth = _make_saml_auth()
+    return redirect(auth.logout(name_id=session.get('samlNameId'),
+                                session_index=session.get('samlSessionIndex'),
+                                nq=session.get('samlNameIdNameQualifier'),
+                                name_id_format=session.get('samlNameIdFormat'),
+                                spnq=session.get('samlNameIdSPNameQualifier')))
+
+
+@auth_api.route("/saml/sls/", methods=["GET"])
+def saml_single_logout(**_):
+    auth: OneLogin_Saml2_Auth = _make_saml_auth()
+    request_id: str = session.get('LogoutRequestID')
+
+    url: str = auth.process_slo(request_id=request_id,
+                                delete_session_cb=lambda: session.clear())
+
+    errors: list = auth.get_errors()
+
+    if len(errors) == 0:
+        # To avoid open redirect attacks, make sure we're being redirected to the same host
+        if url and is_same_host(request.host, url):
+            return redirect(url)
+    else:
+        errors = "\n".join([f" - {error}\n" for error in auth.get_errors()])
+        LOGGER.error(f"SAML SLO request failed: {auth.get_last_error_reason()}\n{errors}")
+        return make_api_response({"err_code": 1,
+                                  "exception": auth.get_last_error_reason()},
+                                 err="An error occured while processing SAML SLO",
                                  status_code=401)
 
 
@@ -1058,3 +1098,27 @@ def _make_saml_auth(request_data: Dict[str, Any] = None) -> OneLogin_Saml2_Auth:
     request_data: Dict[str, Any] = request_data or _prepare_flask_request(request)
     return OneLogin_Saml2_Auth(request_data,
                                custom_base_path=config.auth.saml.config_dir)
+
+
+url_regex = re.compile(
+    r'^([a-z0-9\.\-]*)://'  # scheme is validated separately
+    r'((?:[A-Z0-9_](?:[A-Z0-9-_]{0,61}[A-Z0-9_])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|'  # domain...
+    r'(?:[A-Z0-9_](?:[A-Z0-9-_]{0,61}[A-Z0-9_]))|'  # single-label-domain
+    r'localhost|'  # localhost...
+    r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|'  # ...or ipv4
+    r'\[?[A-F0-9]*:[A-F0-9:]+\]?)'  # ...or ipv6
+    r'(:\d+)?'  # optional port
+    r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+
+
+def is_same_host(url1: str, url2: str) -> bool:
+
+    def get_host(url: str):
+        match = re.match(url_regex, url1)
+        if match:
+            groups = match.groups()
+            if len(groups) > 0:
+                return groups[1]
+        return None
+
+    return get_host(url1) == get_host(url2)
