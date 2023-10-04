@@ -524,41 +524,22 @@ def saml_acs(**_):
         # session["samlNameIdSPNameQualifier"] = auth.get_nameid_spnq()
         # session["samlSessionIndex"] = auth.get_session_index()
 
-        self_url = OneLogin_Saml2_Utils.get_self_url(request_data)
-
         login()
+
+        self_url = OneLogin_Saml2_Utils.get_self_url(request_data)
 
         if "RelayState" in request.form and self_url != request.form["RelayState"]:
             # To avoid 'Open Redirect' attacks, before execute the redirection confirm
             # the value of the request.form["RelayState"] is a trusted URL.
             return redirect(auth.redirect_to(request.form["RelayState"]))
     else:
-        errors: list = [f" - {error}\n" for error in errors]
-        error_msg: str = f"SAML ACS request failed: {auth.get_last_error_reason()}\n{''.join(errors)}"
+        errors: list = "\n".join([f" - {error}" for error in errors])
+        error_msg: str = f"SAML ACS request failed: {auth.get_last_error_reason()}\n{errors}"
         LOGGER.error(error_msg)
-        # TODO - need better error handling
-        raise Exception(error_msg)
-
-
-# @auth_api.route("/saml/", methods=["GET"])
-# def saml_validate(**_):
-
-#     avatar = None
-#     username = None
-#     email_adr = None
-
-#     if config.auth.saml.enabled:
-#         pass
-
-#     if username is None:
-#         return make_api_response({"err_code": 0}, err="SAML disabled on the server", status_code=401)
-
-#     return make_api_response({
-#         "avatar": avatar,
-#         "username": username,
-#         "saml_token": "howdy cowboy",
-#         "email_adr": email_adr
-#     })
+        return make_api_response({"err_code": 1,
+                                  "exception": auth.get_last_error_reason()},
+                                 err="Unhandled exception occured while processing SAML ACS",
+                                 status_code=401)
 
 
 # noinspection PyBroadException
