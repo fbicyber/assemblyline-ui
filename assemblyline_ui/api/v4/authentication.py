@@ -376,7 +376,7 @@ def login(**_):
     if config.auth.saml.enabled and saml_name_id and saml_user_data:
         user = saml_name_id
         # TODO we need the equivalent of oath's `provider.authorize_redirect`
-        # to redirectly safely without CORS errors
+        # to redirectly safely without CORS errors.
 
     if config.auth.oauth.enabled and oauth_provider and oauth_token is None:
         oauth = current_app.extensions.get('authlib.integrations.flask_client')
@@ -519,6 +519,7 @@ def saml_acs(**_):
 
         session["samlUserdata"] = auth.get_attributes()
         session["samlNameId"] = auth.get_nameid()
+        # TODO These are additional attributes that others may require
         # session["samlNameIdFormat"] = auth.get_nameid_format()
         # session["samlNameIdNameQualifier"] = auth.get_nameid_nq()
         # session["samlNameIdSPNameQualifier"] = auth.get_nameid_spnq()
