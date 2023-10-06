@@ -1,19 +1,19 @@
 import base64
 import zlib
-from assemblyline.odm.models.user import USER_ROLES
-
-from flask import abort, request, current_app, session as flsk_session
 
 from assemblyline.common.isotime import now
+from assemblyline.odm.models.user import USER_ROLES
 from assemblyline.remote.datatypes.queues.named import NamedQueue
-from assemblyline_ui.config import AUDIT, AUDIT_LOG, AUDIT_KW_TARGET, KV_SESSION
-from assemblyline_ui.config import config
+from assemblyline_ui.config import AUDIT, AUDIT_KW_TARGET, AUDIT_LOG, KV_SESSION, config
 from assemblyline_ui.http_exceptions import AuthenticationException
+from assemblyline_ui.security.saml.saml_auth import validate_saml_user
 from assemblyline_ui.security.apikey_auth import validate_apikey
 from assemblyline_ui.security.ldap_auth import validate_ldapuser
 from assemblyline_ui.security.oauth_auth import validate_oauth_id, validate_oauth_token
 from assemblyline_ui.security.second_factor_auth import validate_2fa
 from assemblyline_ui.security.userpass_auth import validate_userpass
+from flask import abort, current_app, request
+from flask import session as flsk_session
 
 nonpersistent_config = {
     'host': config.core.redis.nonpersistent.host,
@@ -179,15 +179,16 @@ def default_authenticator(auth, req, ses, storage):
     #
     # Apikey authentication procedure is not subject to OTP challenge but has limited functionality
 
-    apikey = auth.get('apikey', None)
+    apikey = auth.get('apikey')
     otp = auth.get('otp', 0)
-    webauthn_auth_resp = auth.get('webauthn_auth_resp', None)
+    webauthn_auth_resp = auth.get('webauthn_auth_resp')
     state = ses.pop('state', None)
-    password = auth.get('password', None)
-    uname = auth.get('username', None)
-    oauth_token_id = auth.get('oauth_token_id', None)
-    oauth_token = auth.get('oauth_token', None)
-    oauth_provider = auth.get('oauth_provider', None)
+    password = auth.get('password')
+    uname = auth.get('username')
+    oauth_token_id = auth.get('oauth_token_id')
+    oauth_token = auth.get('oauth_token')
+    oauth_provider = auth.get('oauth_provider')
+    saml_user_data = auth.get('saml_user_data')
 
     if not uname and not oauth_token:
         raise AuthenticationException('No user specified for authentication')
@@ -207,6 +208,10 @@ def default_authenticator(auth, req, ses, storage):
         validated_user, roles_limit = validate_apikey(uname, apikey, storage)
         if not validated_user:
             validated_user, roles_limit = validate_oauth_token(oauth_token, oauth_provider)
+        # TODO - move this down to the 2FA group?
+        if not validated_user and saml_user_data:
+            validated_user, roles_limit = validate_saml_user(uname, saml_user_data, storage)
+
         if validated_user:
             return validated_user, roles_limit
 

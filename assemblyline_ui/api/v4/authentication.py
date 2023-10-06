@@ -1,32 +1,49 @@
-
 import hashlib
+import re
+from io import BytesIO
+from typing import Any, Dict
+from urllib.parse import urlparse
+
 import jwt
 import pyqrcode
-import re
-
-from authlib.integrations.requests_client import OAuth2Session
-from authlib.integrations.base_client import OAuthError
-from flask import current_app, redirect, request
-from flask import session as flsk_session
-from io import BytesIO
-from passlib.hash import bcrypt
-from urllib.parse import urlparse
-from werkzeug.exceptions import BadRequest, UnsupportedMediaType
-
 from assemblyline.common.comms import send_reset_email, send_signup_email
 from assemblyline.common.isotime import now
-from assemblyline.common.security import (check_password_requirements, generate_random_secret, get_password_hash,
-                                          get_password_requirement_message, get_random_password, get_totp_token)
+from assemblyline.common.security import (
+    check_password_requirements,
+    generate_random_secret,
+    get_password_hash,
+    get_password_requirement_message,
+    get_random_password,
+    get_totp_token,
+)
 from assemblyline.common.uid import get_random_id
-from assemblyline.odm.models.user import User, ROLES, load_roles, load_roles_form_acls
+from assemblyline.odm.models.user import ROLES, User, load_roles, load_roles_form_acls
 from assemblyline_ui.api.base import api_login, make_api_response, make_subapi_blueprint
-from assemblyline_ui.config import (KV_SESSION, LOGGER, SECRET_KEY, STORAGE, config, get_reset_queue,
-                                    get_signup_queue, get_token_store, CLASSIFICATION as Classification)
+from assemblyline_ui.config import CLASSIFICATION as Classification
+from assemblyline_ui.config import (
+    KV_SESSION,
+    LOGGER,
+    SECRET_KEY,
+    STORAGE,
+    config,
+    get_reset_queue,
+    get_signup_queue,
+    get_token_store,
+)
 from assemblyline_ui.helper.oauth import fetch_avatar, parse_profile
-from assemblyline_ui.helper.user import get_dynamic_classification, API_PRIV_MAP
+from assemblyline_ui.helper.user import API_PRIV_MAP, get_dynamic_classification
 from assemblyline_ui.http_exceptions import AuthenticationException
 from assemblyline_ui.security.authenticator import default_authenticator
-
+from authlib.integrations.base_client import OAuthError
+from authlib.integrations.requests_client import OAuth2Session
+from flask import current_app, redirect, request
+from flask import session
+from flask import session as flsk_session
+from onelogin.saml2.auth import OneLogin_Saml2_Auth
+from onelogin.saml2.utils import OneLogin_Saml2_Utils
+from passlib.hash import bcrypt
+from werkzeug.exceptions import BadRequest, UnsupportedMediaType
+from werkzeug.wrappers import Request
 
 SCOPES = {
     'r': ["R"],
@@ -94,7 +111,7 @@ def add_apikey(name, priv, **kwargs):
     }
     STORAGE.user.save(user['uname'], user_data)
 
-    return make_api_response({"acl": priv_map, "apikey": f"{name}:{random_pass}", "name": name,  "roles": roles})
+    return make_api_response({"acl": priv_map, "apikey": f"{name}:{random_pass}", "name": name, "roles": roles})
 
 
 @auth_api.route("/apikey/<name>/", methods=["DELETE"])
@@ -346,13 +363,20 @@ def login(**_):
     except (BadRequest, UnsupportedMediaType):
         data = request.values
 
-    user = data.get('user', None)
-    password = data.get('password', None)
-    apikey = data.get('apikey', None)
-    webauthn_auth_resp = data.get('webauthn_auth_resp', None)
-    oauth_provider = data.get('oauth_provider', None)
-    oauth_token_id = data.get('oauth_token_id', None)
-    oauth_token = data.get('oauth_token', None)
+    user = data.get('user')
+    password = data.get('password')
+    apikey = data.get('apikey')
+    webauthn_auth_resp = data.get('webauthn_auth_resp')
+    oauth_provider = data.get('oauth_provider')
+    oauth_token_id = data.get('oauth_token_id')
+    oauth_token = data.get('oauth_token')
+    saml_name_id = flsk_session.get('samlNameId')
+    saml_user_data = flsk_session.get('samlUserdata')
+
+    if config.auth.saml.enabled and saml_name_id and saml_user_data:
+        user = saml_name_id
+        # TODO we need the equivalent of oath's `provider.authorize_redirect`
+        # to redirectly safely without CORS errors.
 
     if config.auth.oauth.enabled and oauth_provider and oauth_token is None:
         oauth = current_app.extensions.get('authlib.integrations.flask_client')
@@ -367,7 +391,11 @@ def login(**_):
     except Exception:
         raise AuthenticationException('Invalid OTP token')
 
-    if (user and password) or (user and apikey) or (user and oauth_token_id) or oauth_token:
+    if (user and password) or \
+       (user and apikey) or \
+       (user and oauth_token_id) or \
+        oauth_token or \
+       (user and saml_user_data):
         auth = {
             'username': user,
             'password': password,
@@ -376,7 +404,8 @@ def login(**_):
             'apikey': apikey,
             'oauth_token_id': oauth_token_id,
             'oauth_token': oauth_token,
-            'oauth_provider': oauth_provider
+            'oauth_provider': oauth_provider,
+            'saml_user_data': saml_user_data
         }
 
         logged_in_uname = None
@@ -454,6 +483,106 @@ def logout(**_):
         return res
     except ValueError:
         return make_api_response("", err="No user logged in?", status_code=400)
+
+
+@auth_api.route("/saml/sso/", methods=["GET"])
+def saml_sso(**_):
+    auth: OneLogin_Saml2_Auth = _make_saml_auth()
+    sso_built_url: str = auth.login(return_to=request.host_url)
+    session["AuthNRequestID"] = auth.get_last_request_id()
+    return redirect(sso_built_url)
+
+
+@auth_api.route("/saml/acs/", methods=["GET", "POST"])
+def saml_acs(**_):
+    '''
+    A SAML Assertion Consumer Service (ACS) is a web service endpoint that is
+    used in the SAML authentication and authorization protocol. The ACS is a
+    service provided by the service provider (SP) that receives and processes
+    SAML assertions from the identity provider (IdP). The ACS is responsible
+    for extracting the relevant information from the SAML assertion, such as
+    the user's attributes or the authentication event, and using that
+    information to grant the user access to the protected resource.
+    '''
+    request_data: Dict[str, Any] = _prepare_flask_request(request)
+    auth: OneLogin_Saml2_Auth = _make_saml_auth(request_data)
+    request_id: str = session.get("AuthNRequestID")
+
+    auth.process_response(request_id=request_id)
+    errors: list = auth.get_errors()
+
+    # If authentication failed, it'll be noted in `errors`
+    # TODO: redirect on failure? something else?
+    if len(errors) == 0:
+        if "AuthNRequestID" in session:
+            del session["AuthNRequestID"]
+
+        session["samlUserdata"] = auth.get_attributes()
+        session["samlNameId"] = auth.get_nameid()
+        # TODO These are additional attributes that others may require
+        # session["samlNameIdFormat"] = auth.get_nameid_format()
+        # session["samlNameIdNameQualifier"] = auth.get_nameid_nq()
+        # session["samlNameIdSPNameQualifier"] = auth.get_nameid_spnq()
+        # session["samlSessionIndex"] = auth.get_session_index()
+
+        login()
+
+        self_url = OneLogin_Saml2_Utils.get_self_url(request_data)
+
+        redirect_to: str = request.form.get("RelayState")
+
+        if redirect_to and self_url != redirect_to:
+            # To avoid open redirect attacks, make sure we're being redirected to the same host
+            if is_same_host(request.host, redirect_to):
+                return redirect(auth.redirect_to(redirect_to))
+            else:
+                return make_api_response({"err_code": 1},
+                                         err="SAML ACS `RelayState` attempted to redirect to an unknown host",
+                                         status_code=401)
+        else:
+            return make_api_response({"err_code": 1},
+                                     err="SAML ACS request made without a `RelayState`",
+                                     status_code=401)
+    else:
+        errors = "\n".join([f" - {error}\n" for error in auth.get_errors()])
+        LOGGER.error(f"SAML ACS request failed: {auth.get_last_error_reason()}\n{errors}")
+        return make_api_response({"err_code": 1,
+                                  "exception": auth.get_last_error_reason()},
+                                 err="An error occured while processing SAML ACS",
+                                 status_code=401)
+
+
+@auth_api.route("/saml/slo/", methods=["GET"])
+def saml_logout(**_):
+    auth: OneLogin_Saml2_Auth = _make_saml_auth()
+    return redirect(auth.logout(name_id=session.get('samlNameId'),
+                                session_index=session.get('samlSessionIndex'),
+                                nq=session.get('samlNameIdNameQualifier'),
+                                name_id_format=session.get('samlNameIdFormat'),
+                                spnq=session.get('samlNameIdSPNameQualifier')))
+
+
+@auth_api.route("/saml/sls/", methods=["GET"])
+def saml_single_logout(**_):
+    auth: OneLogin_Saml2_Auth = _make_saml_auth()
+    request_id: str = session.get('LogoutRequestID')
+
+    url: str = auth.process_slo(request_id=request_id,
+                                delete_session_cb=lambda: session.clear())
+
+    errors: list = auth.get_errors()
+
+    if len(errors) == 0:
+        # To avoid open redirect attacks, make sure we're being redirected to the same host
+        if url and is_same_host(request.host, url):
+            return redirect(url)
+    else:
+        errors = "\n".join([f" - {error}\n" for error in auth.get_errors()])
+        LOGGER.error(f"SAML SLO request failed: {auth.get_last_error_reason()}\n{errors}")
+        return make_api_response({"err_code": 1,
+                                  "exception": auth.get_last_error_reason()},
+                                 err="An error occured while processing SAML SLO",
+                                 status_code=401)
 
 
 # noinspection PyBroadException
@@ -951,3 +1080,48 @@ def validate_otp(token, **kwargs):
     else:
         flsk_session['temp_otp_sk'] = secret_key
         return make_api_response({'success': False}, err="OTP token does not match secret key", status_code=400)
+
+
+def _prepare_flask_request(request: Request) -> Dict[str, Any]:
+    # If server is behind proxys or balancers use the HTTP_X_FORWARDED fields
+    return {
+        # TODO - the https switching disabled because everything redirects to http under the hood. Possibly just a
+        # local misconfiguration issue, but it screws up the URL matching later on in `saml_process_assertion`.
+        "https": "on",  # if request.scheme == "https" else "off",
+        "http_host": request.host,
+        "script_name": request.path,
+        "get_data": request.args.copy(),
+        # Uncomment if using ADFS as IdP, https://github.com/onelogin/python-saml/pull/144
+        # "lowercase_urlencoding": True,
+        "post_data": request.form.copy()
+    }
+
+
+def _make_saml_auth(request_data: Dict[str, Any] = None) -> OneLogin_Saml2_Auth:
+    request_data: Dict[str, Any] = request_data or _prepare_flask_request(request)
+    return OneLogin_Saml2_Auth(request_data,
+                               custom_base_path=config.auth.saml.config_dir)
+
+
+url_regex = re.compile(
+    r'^([a-z0-9\.\-]*)://'  # scheme is validated separately
+    r'((?:[A-Z0-9_](?:[A-Z0-9-_]{0,61}[A-Z0-9_])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|'  # domain...
+    r'(?:[A-Z0-9_](?:[A-Z0-9-_]{0,61}[A-Z0-9_]))|'  # single-label-domain
+    r'localhost|'  # localhost...
+    r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|'  # ...or ipv4
+    r'\[?[A-F0-9]*:[A-F0-9:]+\]?)'  # ...or ipv6
+    r'(:\d+)?'  # optional port
+    r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+
+
+def is_same_host(url1: str, url2: str) -> bool:
+
+    def get_host(url: str):
+        match = re.match(url_regex, url1)
+        if match:
+            groups = match.groups()
+            if len(groups) > 0:
+                return groups[1]
+        return None
+
+    return get_host(url1) == get_host(url2)

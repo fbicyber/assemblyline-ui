@@ -1,0 +1,25 @@
+{
+    "sp": {
+        "entityId": "http://<my sp>/saml/metadata/",
+        "assertionConsumerService": {
+            "url": "http://<my sp>/saml/acs/",
+            "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+        },
+        "singleLogoutService": {
+            "url": "http://<my sp>/saml/sls/",
+            "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+        },
+        "NameIDFormat": "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent"
+    },
+    "idp": {
+        "entityId": "https://<my-idp>/adfs/services/trust",
+        "singleSignOnService": {
+            "url": "https://<my-idp>/adfs/ls/",
+            "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+        },
+        "singleLogoutService": {
+            "url": "https://<my-idp>/adfs/ls/",
+            "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+        }
+    }
+}
